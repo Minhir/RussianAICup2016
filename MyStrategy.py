@@ -23,6 +23,10 @@ class MyStrategy:
         self.lane_array_TOP = []
         self.target_point_x, self.target_point_y = None, None
         self.step_point_x, self.step_point_y = None, None
+        self.last5step = [[1, 2], [3, 4], [5, 6], [7, 8], [9, 10]]
+        self.is_stuck = False
+        self.stuck_start_tick = None
+        self.status = "go"   # "go", "fight", "stuck"
         self.lane_array_BOTTOM = [[250, 3800],
                                   [500, 3800],
                                   [750, 3800],
@@ -37,19 +41,19 @@ class MyStrategy:
                                   [3000, 3800],
                                   [3250, 3800],
                                   [3500, 3800],
-                                  [3750, 3600],
-                                  [3750, 3300],
-                                  [3750, 3000],
-                                  [3750, 2750],
-                                  [3750, 2500],
-                                  [3750, 2250],
-                                  [3750, 2000],
-                                  [3750, 1750],
-                                  [3750, 1500],
-                                  [3750, 1250],
-                                  [3750, 1000],
-                                  [3750, 750],
-                                  [3750, 500]]
+                                  [3850, 3600],
+                                  [3850, 3300],
+                                  [3850, 3000],
+                                  [3850, 2750],
+                                  [3850, 2500],
+                                  [3850, 2250],
+                                  [3850, 2000],
+                                  [3850, 1750],
+                                  [3850, 1500],
+                                  [3850, 1250],
+                                  [3850, 1000],
+                                  [3850, 750],
+                                  [3850, 500]]
 
     def move(self, me: Wizard, world: World, game: Game, move: Move):
         if world.tick_index == 0:
@@ -63,19 +67,21 @@ class MyStrategy:
             self.map_master(1)
 
         self.step_point_x, self.step_point_y = self.find_way(world, me)
+        self.stuck_check()
         self.go(me, move, game, world.tick_index)
 
         # move.action = ActionType.MAGIC_MISSILE
 
         # debug
-        if world.tick_index % 30 == 0:
+        if world.tick_index % 1 == 0:
             # print(move.turn)
-            print("TIME: ", time() - c)
-            print("Tick: ", world.tick_index)
+            if time() - c > 0.001:
+                print("TIME: ", time() - c)
+            '''print("Tick: ", world.tick_index)
             print("X, Y coord: ", self.x, self.y)
             print("Target points: ", self.target_point_x, self.target_point_y)
             print("Step points: ", self.step_point_x, self.step_point_y)
-            print("Distance: ", me.get_distance_to(self.target_point_x, self.target_point_y))
+            print("Distance: ", me.get_distance_to(self.target_point_x, self.target_point_y))'''
 
     def init(self, me):
         # self.lane = randrange(LaneType.BOTTOM, LaneType.MIDDLE, LaneType.TOP)
@@ -103,15 +109,40 @@ class MyStrategy:
                 self.lane_point_index -= 1
         self.target_point_x, self.target_point_y = lane_array[self.lane_point_index]
 
-    def go(self, me: Wizard, move: Move, game: Game, tick):
-        move.turn = clamp(me.get_angle_to(self.step_point_x, self.step_point_y),
-                          -game.wizard_max_turn_angle, game.wizard_max_turn_angle)
-        move.speed = game.wizard_forward_speed * (1 - 0.5 * move.turn / game.wizard_max_turn_angle)
-        move.strafe_speed += game.wizard_strafe_speed * sin(0.05 * tick) * 0.2
-        # move.strafe_speed = clamp(move.strafe_speed, -game.wizard_strafe_speed, game.wizard_strafe_speed)
+    def stuck_check(self):
+        if self.status == "stuck":
+            return
+        for i in range(4):
+            self.last5step[i][0] = self.last5step[i + 1][0]
+            self.last5step[i][1] = self.last5step[i + 1][1]
+        self.last5step[4] = [self.x, self.y]
+        for i in range(3):
+            if self.last5step[i] != self.last5step[i + 1]:
+                self.is_stuck = False
+                break
+        else:
+            self.is_stuck = True
+            self.status = "stuck"
+
+    def go(self, me, move, game, tick):
+        if self.status == "go":
+            move.turn = clamp(me.get_angle_to(self.step_point_x, self.step_point_y),
+                              -game.wizard_max_turn_angle, game.wizard_max_turn_angle)
+            move.speed = game.wizard_forward_speed * (1 - 0.5 * move.turn / game.wizard_max_turn_angle)
+            move.strafe_speed += game.wizard_strafe_speed * sin(0.05 * tick) * 0.2
+        elif self.status == "fight":
+            pass
+        elif self.status == "stuck":
+            if self.stuck_start_tick is None:
+                self.stuck_start_tick = tick
+            elif tick - self.stuck_start_tick > 30:
+                self.status = "go"
+                self.stuck_start_tick = None
+            move.speed = -game.wizard_forward_speed
+            move.turn = uniform(-game.wizard_max_turn_angle, game.wizard_max_turn_angle)
 
     def find_way(self, world, me):
-        width = 40
+        width = 80
         n, m = int(800 / width / 2), int(800 / width / 2 - 1)
         k = int(800 / width - 1)
         stop_x = int(clamp((self.target_point_x - self.x + 400) // width, 0, k))
@@ -230,5 +261,6 @@ class MyStrategy:
                     if area[x][y - 1] == 0:
                         x, y = x, y - 1
                         continue
+
         return x * width - 400 + self.x, y * width - 400 + self.y
 
