@@ -3,10 +3,18 @@ from model.Move import Move
 from model.Wizard import Wizard
 from model.World import World
 from model.LaneType import LaneType
+from model.ActionType import ActionType
+from model.Faction import Faction
 from random import randrange, uniform
-from math import sin
+from math import sin, fabs
 from time import time
 
+try:
+    from debug_client import DebugClient
+except:
+    debug = None
+else:
+    debug = DebugClient()
 
 def clamp(n, smallest, largest):
         return max(smallest, min(n, largest))
@@ -27,6 +35,8 @@ class MyStrategy:
         self.is_stuck = False
         self.stuck_start_tick = None
         self.status = "go"   # "go", "fight", "stuck"
+        self.faction = None
+        self.enemy_faction = None
         self.lane_array_BOTTOM = [[250, 3800],
                                   [500, 3800],
                                   [750, 3800],
@@ -63,16 +73,21 @@ class MyStrategy:
         self.x = me.x
         self.y = me.y
 
+        if me.life < me.max_life * 0.3:
+            self.map_master(-1)
         if me.get_distance_to(self.target_point_x, self.target_point_y) < 200:
             self.map_master(1)
 
         self.step_point_x, self.step_point_y = self.find_way(world, me)
         self.stuck_check()
+        self.attack(move, game, me, self.situation_analysis(world, me, move))
         self.go(me, move, game, world.tick_index)
 
-        # move.action = ActionType.MAGIC_MISSILE
-
         # debug
+        if debug:
+            with debug.post() as dbg:
+                dbg.post(debug.circle(self.step_point_x, self.step_point_y, 10, "r"))
+
         if world.tick_index % 1 == 0:
             # print(move.turn)
             if time() - c > 0.001:
@@ -83,12 +98,47 @@ class MyStrategy:
             print("Step points: ", self.step_point_x, self.step_point_y)
             print("Distance: ", me.get_distance_to(self.target_point_x, self.target_point_y))'''
 
+    def attack(self, move, game, me, enemy):
+        if enemy is None:
+            return
+        angle = me.get_angle_to(enemy.x, enemy.y)
+        move.turn = angle
+        if fabs(angle) < game.staff_sector / 2:
+            move.cast_angle = angle
+            move.min_cast_distance = me.get_distance_to(enemy.x, enemy.y) #- enemy.radius + game.getMagicMissileRadius
+            move.action = ActionType.MAGIC_MISSILE
+
+    def situation_analysis(self, world, me, move):
+        minions, wizards = [], []
+        for i in world.wizards:
+            if i.faction == self.enemy_faction:
+                if me.get_distance_to(i.x, i.y) < me.cast_range:
+                    wizards.append(i)
+        if len(wizards) > 0:
+            wizards.sort(key=lambda x: x.life)
+            self.status = "fight"
+            return wizards[0]
+        for i in world.minions:
+            if i.faction == self.enemy_faction:
+                if me.get_distance_to(i.x, i.y) < me.cast_range:
+                    minions.append(i)
+        if len(minions) > 0:
+            minions.sort(key=lambda x: x.life)
+            self.status = "fight"
+            return minions[0]
+        return None
+
     def init(self, me):
         # self.lane = randrange(LaneType.BOTTOM, LaneType.MIDDLE, LaneType.TOP)
         self.lane = LaneType.BOTTOM
         self.x = me.x
         self.y = me.y
         self.target_point_x, self.target_point_y = self.x, self.y
+        self.faction = me.faction
+        if self.faction == Faction.ACADEMY:
+            self.enemy_faction = Faction.RENEGADES
+        else:
+            self.enemy_faction = Faction.ACADEMY
 
     def map_master(self, direction):
         lane_array = None
@@ -224,7 +274,7 @@ class MyStrategy:
         # find way in array
         way = []
         index = area[stop_x][stop_y]
-        # print("INDEX ", index)
+        # debug print("INDEX ", index)
         x, y = stop_x, stop_y
         if index > 1:
             while index != 2:
@@ -263,4 +313,3 @@ class MyStrategy:
                         continue
 
         return x * width - 400 + self.x, y * width - 400 + self.y
-
