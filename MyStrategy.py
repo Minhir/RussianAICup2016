@@ -6,7 +6,7 @@ from model.LaneType import LaneType
 from model.ActionType import ActionType
 from model.Faction import Faction
 from model.Message import Message
-from random import uniform, choice
+from random import uniform, choice, random
 from math import sin, cos, fabs, pi
 import copy
 
@@ -48,13 +48,16 @@ class MyStrategy:
         self.is_fight = False
         self.last_tick = 0
         self.last_map_master_direction = 0
+        self.get_out_bin = 1
 
     def move(self, me: Wizard, world: World, game: Game, move: Move):
         if world.tick_index == 0:
             self.init(me, move)
             return
         if world.tick_index < 10 and not me.master:
-            pass
+            if me.messages:
+                for m in me.messages:
+                    self.lane = m.lane
         if world.tick_index == 10 and self.lane is None:
             self.lane = choice([LaneType.BOTTOM, LaneType.MIDDLE, LaneType.TOP])
         if world.tick_index - self.last_tick > 60:  # check death
@@ -73,6 +76,8 @@ class MyStrategy:
             self.debug_func(world)  # debug
             print("stuck")
             return
+        else:
+            move.strafe_speed = 0
 
         if self.check_danger(me):
             self.map_master(-1, me)
@@ -82,10 +87,10 @@ class MyStrategy:
             print("escape")
             return
 
-        self.is_fight, enemy = self.situation_analysis(world, me)
+        self.is_fight, enemy, distance_to_closest_minion = self.situation_analysis(world, me)
         if self.is_fight:
             self.attack(move, game, me, enemy)
-            if me.life < me.max_life * 0.5:
+            if (me.life < me.max_life * 0.5) or (distance_to_closest_minion < 250):
                 self.map_master(-1, me)
                 self.step_point_x, self.step_point_y = self.find_way(world, me)
                 self.go_back(me, move, game)
@@ -114,7 +119,7 @@ class MyStrategy:
             move.action = ActionType.MAGIC_MISSILE
 
     def check_danger(self, me):
-        if me.life < me.max_life * 0.25:
+        if me.life < me.max_life * 0.3:
             return True
         else:
             return False
@@ -134,13 +139,14 @@ class MyStrategy:
                 self.stuck_start_tick = tick
                 return True
         elif tick - self.stuck_start_tick > 15:
+            self.get_out_bin *= -1
             self.stuck_start_tick = None
             return False
         else:
             return True
 
     def find_way(self, world, me):
-        width = 50
+        width = 40
         cage_length = 800
         half_cage_length = cage_length / 2
         area_len = int(cage_length / width - 1)
@@ -160,10 +166,10 @@ class MyStrategy:
                 continue
             add_radius_x = []
             add_radius_y = []
-            for j in range(int((i.radius + me.radius) // width)):
-                for k in [pi/12*x for x in range(-12, 13)]:
-                    add_radius_x.append((j + 1) * width * sin(k))
-                    add_radius_y.append((j + 1) * width * cos(k))
+            for j in range(1, int((i.radius + me.radius) // width) + 1):
+                for k in [pi/18*x for x in range(-18, 19)]:
+                    add_radius_x.append((j * width) * sin(k))
+                    add_radius_y.append((j * width) * cos(k))
             add_radius_x.append(0)
             add_radius_y.append(0)
             for j in range(len(add_radius_x)):
@@ -270,7 +276,9 @@ class MyStrategy:
 
     def get_out(self, move, game):
         move.speed = -game.wizard_forward_speed
-        move.turn = uniform(-game.wizard_max_turn_angle, game.wizard_max_turn_angle)
+        move.strafe_speed = game.wizard_strafe_speed * 0.5 * self.get_out_bin
+        #move.turn = uniform(-game.wizard_max_turn_angle, game.wizard_max_turn_angle)
+        move.turn = game.wizard_max_turn_angle * self.get_out_bin
 
     def go(self, me, move, game):
         move.turn = clamp(me.get_angle_to(self.step_point_x, self.step_point_y),
@@ -332,31 +340,36 @@ class MyStrategy:
 
     def situation_analysis(self, world, me):
         minions, wizards, buildings = [], [], []
+        enemy = None
+        distance_to_closest_minion = float("inf")
         for i in world.wizards:
             if i.faction == self.enemy_faction:
                 if me.get_distance_to(i.x, i.y) < me.cast_range:
                     wizards.append(i)
         if len(wizards) > 0:
-            wizards.sort(key=lambda x: x.life)
-            return True, wizards[0]
+            enemy = min(wizards, key=lambda x: x.life)
         for i in world.buildings:
             if i.faction == self.enemy_faction:
                 if me.get_distance_to(i.x, i.y) < me.cast_range:
                     buildings.append(i)
         if len(buildings) > 0:
-            buildings.sort(key=lambda x: x.life)
-            return True, buildings[0]
+            if enemy is None:
+                enemy = min(buildings, key=lambda x: x.life)
         for i in world.minions:
             if i.faction == self.enemy_faction:
                 if me.get_distance_to(i.x, i.y) < me.cast_range:
                     minions.append(i)
         if len(minions) > 0:
-            minions.sort(key=lambda x: x.life)
-            return True, minions[0]
-        return False, None
+            if enemy is None:
+                enemy = min(minions, key=lambda x: x.life)
+            closest_minion = min(minions, key=lambda x: me.get_distance_to(x.x, x.y))
+            distance_to_closest_minion = me.get_distance_to(closest_minion.x, closest_minion.y)
+        if enemy is None:
+            return False, None, None
+        else:
+            return True, enemy, distance_to_closest_minion
 
     def debug_func(self, world):
-        return
         if debug:
             area = self.area_cope
             width = self.width
