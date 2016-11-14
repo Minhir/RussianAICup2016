@@ -59,6 +59,10 @@ class MyStrategy:
             self.lane = choice([LaneType.BOTTOM, LaneType.MIDDLE, LaneType.TOP])
         if world.tick_index - self.last_tick > 60:  # check death
             self.lane_point_index = 0
+            self.last_map_master_direction = 0
+            self.go_back_flag = False
+            self.stuck_start_tick = None
+            self.is_fight = False
 
         self.last_tick = world.tick_index
         self.x = me.x
