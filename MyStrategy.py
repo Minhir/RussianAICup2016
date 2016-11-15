@@ -49,6 +49,8 @@ class MyStrategy:
         self.last_tick = 0
         self.last_map_master_direction = 0
         self.get_out_bin = 1
+        self.sin_table = [sin(pi/18*x) for x in range(-18, 19)]
+        self.cos_table = [cos(pi/18*x) for x in range(-18, 19)]
 
     def move(self, me: Wizard, world: World, game: Game, move: Move):
         if world.tick_index == 0:
@@ -102,7 +104,13 @@ class MyStrategy:
             return
 
         # GO
-        self.map_master(1, me)
+        if world.tick_index < 1500 - int(self.lane == LaneType.MIDDLE) * 220:  # wait for minions
+            if me.y < 200 + me.x:
+                self.map_master(-1, me)
+            else:
+                self.map_master(1, me)
+        else:
+            self.map_master(1, me)
         self.step_point_x, self.step_point_y = self.find_way(world, me)
         self.go(me, move, game)
         self.debug_func(world)  # debug
@@ -167,9 +175,9 @@ class MyStrategy:
             add_radius_x = []
             add_radius_y = []
             for j in range(1, int((i.radius + me.radius) // width) + 1):
-                for k in [pi/18*x for x in range(-18, 19)]:
-                    add_radius_x.append((j * width) * sin(k))
-                    add_radius_y.append((j * width) * cos(k))
+                for k in range(-18, 19):
+                    add_radius_x.append((j * width) * self.sin_table[k] * 0.99)
+                    add_radius_y.append((j * width) * self.cos_table[k] * 0.99)
             add_radius_x.append(0)
             add_radius_y.append(0)
             for j in range(len(add_radius_x)):
@@ -310,6 +318,19 @@ class MyStrategy:
                              Message(LaneType.BOTTOM, None, None),
                              Message(LaneType.BOTTOM, None, None)]
             self.lane = LaneType.MIDDLE
+
+    def lane_analysis(self, world):
+        top, mid, bot = 0, 0, 0
+        for i in world.wizards:
+            if i.faction == self.faction and (i.x != self.x and i.y != self.y):
+                y_2, y_1 = 3200 - i.x, 4800 - i.x
+                if i.y < y_2:
+                    top += 1
+                if y_2 < i.y < y_1:
+                    mid += 1
+                if i.y > y_1:
+                    bot += 1
+        return top, mid, bot
 
     def map_master(self, direction, me, half_cage_length=400):
         if self.last_map_master_direction == direction:
