@@ -7,7 +7,7 @@ from model.ActionType import ActionType
 from model.Faction import Faction
 from model.Message import Message
 from random import choice, random
-from math import sin, cos, fabs, pi
+from math import sin, cos, fabs, pi, hypot
 import copy
 
 
@@ -50,6 +50,7 @@ class MyStrategy:
         self.get_out_bin = 1
         self.sin_table = [sin(pi/18*x) for x in range(-18, 19)]
         self.cos_table = [cos(pi/18*x) for x in range(-18, 19)]
+        self.way_trajectory = []
 
     def move(self, me: Wizard, world: World, game: Game, move: Move):
         if world.tick_index == 0:
@@ -190,10 +191,10 @@ class MyStrategy:
                 continue
             add_radius_x = []
             add_radius_y = []
-            for j in range(1, int((i.radius + me.radius) // width) + 1):
+            for j in range(1, int((i.radius + me.radius + 0.01) // width) + 1):
                 for k in range(-18, 19):
-                    add_radius_x.append((j * width) * self.sin_table[k] * 0.99)
-                    add_radius_y.append((j * width) * self.cos_table[k] * 0.99)
+                    add_radius_x.append((j * width) * self.sin_table[k])
+                    add_radius_y.append((j * width) * self.cos_table[k])
             add_radius_x.append(0)
             add_radius_y.append(0)
             for j in range(len(add_radius_x)):
@@ -207,6 +208,7 @@ class MyStrategy:
         self.y_cage_offset = y_cage_offset
         # ------------------------------------
         area[int(self.x // width - x_cage_offset)][int(self.y // width - y_cage_offset)] = 1
+        start_points = [int(self.x // width - x_cage_offset), int(self.y // width - y_cage_offset)]
         points = [[int(self.x // width - x_cage_offset), int(self.y // width - y_cage_offset)]]  # Start points... ???
         index = 1
         break_flag = True
@@ -256,13 +258,10 @@ class MyStrategy:
         # find way in array
         index = area[stop_x][stop_y]
         x, y = stop_x, stop_y
-        # debug
-        self.for_debug_start = [(x + x_cage_offset) * width + width / 2, (y + y_cage_offset) * width + width / 2]
-        self.for_debug = []
-        # debug
+        self.way_trajectory = []
         if index > 1:
             while index != 2:
-                self.for_debug.append([x, y])
+                self.way_trajectory.append([x, y])
                 index -= 1
                 if y != area_len:
                     if area[x][y + 1] == index:
@@ -296,10 +295,31 @@ class MyStrategy:
                         if area[x - 1][y - 1] == index:
                             x, y = x - 1, y - 1
                             continue
-        return (x + x_cage_offset) * width + width / 2, (y + y_cage_offset) * width + width / 2
+        # --------------------------------
+        # Find angles in trajectory
+        self.way_trajectory.append([x, y])
+        self.way_trajectory.append(start_points)
+        self.way_trajectory.reverse()
+        if len(self.way_trajectory) > 2:
+            direction = [self.way_trajectory[1][0] - self.way_trajectory[0][0],
+                         self.way_trajectory[1][1] - self.way_trajectory[0][1]]
+            for i in range(2, len(self.way_trajectory)):
+                current_direction = [self.way_trajectory[i][0] - self.way_trajectory[i - 1][0],
+                                     self.way_trajectory[i][1] - self.way_trajectory[i - 1][1]]
+                if direction == current_direction:
+                    continue
+                else:
+                    result_x, result_y = self.way_trajectory[i - 1][0], self.way_trajectory[i - 1][1]
+                    break
+            else:
+                result_x, result_y = self.way_trajectory[-1][0], self.way_trajectory[-1][1]
+        else:
+            result_x, result_y = x, y
+        # --------------------------------
+        return (result_x + x_cage_offset) * width + width / 2, (result_y + y_cage_offset) * width + width / 2
 
     def get_out(self, move, game):
-        move.speed = -game.wizard_forward_speed
+        move.speed = -game.wizard_forward_speed * (1 - 0.5 * random())
         move.strafe_speed = game.wizard_strafe_speed * 0.5 * self.get_out_bin
         move.turn = game.wizard_max_turn_angle * self.get_out_bin
 
@@ -308,6 +328,11 @@ class MyStrategy:
         move.turn = clamp(angle, -game.wizard_max_turn_angle, game.wizard_max_turn_angle)
         move.speed = game.wizard_forward_speed * cos(angle)
         move.strafe_speed = game.wizard_strafe_speed * sin(angle)
+        '''speed_vector_length = hypot(move.speed, move.strafe_speed)
+        if speed_vector_length > me.get_distance_to(self.step_point_x, self.step_point_y):
+            k = speed_vector_length / me.get_distance_to(self.step_point_x, self.step_point_y)
+            move.speed /= k
+            move.strafe_speed /= k'''
 
     def go_back(self, me, move, game):
         angle = me.get_angle_to(self.step_point_x, self.step_point_y)
@@ -364,7 +389,7 @@ class MyStrategy:
 
     def map_master(self, direction, me):
         if self.last_map_master_direction == direction:
-            if me.get_distance_to(self.target_point_x, self.target_point_y) > 200:
+            if me.get_distance_to(self.target_point_x, self.target_point_y) > 250:
                 return
         else:
             self.last_map_master_direction = direction
@@ -412,9 +437,9 @@ class MyStrategy:
                 if me.get_distance_to(i.x, i.y) < me.cast_range:
                     minions.append(i)
         if len(minions) > 0:
-            if enemy is None:
-                enemy = min(minions, key=lambda x: x.life)
             closest_minion = min(minions, key=lambda x: me.get_distance_to(x.x, x.y))
+            if enemy is None:
+                enemy = closest_minion
             distance_to_closest_minion = me.get_distance_to(closest_minion.x, closest_minion.y)
         if enemy is None:
             return False, None, None, is_wizard
@@ -428,9 +453,9 @@ class MyStrategy:
             area = self.area_cope
             width = self.width
             with debug.pre() as dbg:
-                for i in self.for_debug:
-                    dbg.fill_circle((i[0]+ self.x_cage_offset) * width + width/2,
-                                    (i[1] + self.y_cage_offset) * width + width/2, 10,
+                for i in self.way_trajectory:
+                    dbg.fill_circle((i[0]+ self.x_cage_offset) * width + width / 2,
+                                    (i[1] + self.y_cage_offset) * width + width / 2, 10,
                                     Color(r=0.0, g=0.0, b=1.0))
                 for i in range(len(area)):
                     for j in range(len(area)):
@@ -447,6 +472,5 @@ class MyStrategy:
                                           (j + 1 + self.y_cage_offset) * width,
                                           Color(r=0.0, g=0.0, b=0.0))
             with debug.post() as dbg:
-                dbg.fill_circle(self.step_point_x, self.step_point_y, 10, Color(r=0.0, g=1.0, b=0.0))
                 dbg.fill_circle(self.target_point_x, self.target_point_y, 20, Color(r=1.0, g=0.0, b=0.0))
-                dbg.fill_circle(self.for_debug_start[0], self.for_debug_start[1], 40, Color(r=0.0, g=0.0, b=1.0))
+                dbg.fill_circle(self.step_point_x, self.step_point_y, 10, Color(r=0.0, g=1.0, b=0.0))
