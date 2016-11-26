@@ -51,10 +51,12 @@ class MyStrategy:
         self.sin_table = [sin(pi/18*x) for x in range(-18, 19)]
         self.cos_table = [cos(pi/18*x) for x in range(-18, 19)]
         self.way_trajectory = []
+        self.enemy_towers_coordinates = []
+        self.enemy_towers_status = [True, True, True, True, True, True] # Top1, Top2, Mid1, Mid2, Bot1, Bot2
 
     def move(self, me: Wizard, world: World, game: Game, move: Move):
         if world.tick_index == 0:
-            self.init(me, move)
+            self.init(me, move, world)
             return
         if world.tick_index < 10 and not me.master:
             if me.messages:
@@ -76,6 +78,8 @@ class MyStrategy:
         move.turn = 0
         self.x = me.x
         self.y = me.y
+
+        self.tower_analysis(world)  #  !!!!!!!
 
         # Stuck
         if self.check_stuck(world.tick_index):
@@ -104,17 +108,18 @@ class MyStrategy:
                 self.map_master(-1, me)
                 self.step_point_x, self.step_point_y = self.find_way(world, me)
                 self.go_back(me, move, game)
-            """else:
-                    if not is_wizard and distance_to_closest_minion > 500 - 360 * (me.life / me.max_life):
+            else:
+                if not is_wizard and distance_to_closest_minion > 500 - 380 * (me.life / me.max_life):
+                    #  TODO: Не лезть под башню. Не отступать от маршрута. Держать дистанцию до миньона/врага?
+                    self.step_point_x, self.step_point_y = enemy.x, enemy.y
                     self.map_master(1, me)
-                    self.step_point_x, self.step_point_y = self.find_way(world, me)
-                    self.go(me, move, game)"""
+                    self.go(me, move, game)
             self.debug_func(world)  # debug
             print("fight")
             return
 
         # GO
-        if world.tick_index < 1500 - int(self.lane == LaneType.MIDDLE) * 220:  # wait for minions
+        if world.tick_index < 1500 - int(self.lane == LaneType.MIDDLE) * 250:  # wait for minions
             if me.y < 450 + me.x:
                 self.map_master(-1, me)
             else:
@@ -202,8 +207,8 @@ class MyStrategy:
                     area[int((i.x + add_radius_x[j]) // width - x_cage_offset)][int((i.y + add_radius_y[j]) // width - y_cage_offset)] = -1
         area[int(self.x // width - x_cage_offset)][int(self.y // width - y_cage_offset)] = 0
         # ------------------------------------
-        self.area_cope = copy.deepcopy(area) # debug
-        self.width = width # debug
+        self.area_cope = copy.deepcopy(area)  # debug
+        self.width = width
         self.x_cage_offset = x_cage_offset
         self.y_cage_offset = y_cage_offset
         # ------------------------------------
@@ -339,7 +344,7 @@ class MyStrategy:
         move.speed = game.wizard_backward_speed * cos(angle)
         move.strafe_speed = game.wizard_strafe_speed * sin(angle)
 
-    def init(self, me, move):
+    def init(self, me, move, world):
         self.x = me.x
         self.y = me.y
         self.target_point_x, self.target_point_y = self.x, self.y
@@ -354,6 +359,14 @@ class MyStrategy:
                              Message(LaneType.BOTTOM, None, None),
                              Message(LaneType.BOTTOM, None, None)]
             self.lane = LaneType.MIDDLE
+        '''Get enemy towers coordinates. Mirror own towers coordinate.
+        for i in world.buildings:
+            if i.faction == self.faction:
+                [world.width - i.x, world.width - i.y])
+        '''
+        self.enemy_towers_coordinates = [[1687.8740025771563, 50.0], [2629.339679648397, 350.0],
+                                         [2070.710678118655, 1600.0], [3097.386941332822, 1231.9023805485235],
+                                         [3650.0, 2343.2513553373133], [3950.0, 1306.7422221916627]]
 
     def lane_analysis(self, world):
         top, mid, bot = 0, 0, 0
@@ -389,7 +402,7 @@ class MyStrategy:
 
     def map_master(self, direction, me):
         if self.last_map_master_direction == direction:
-            if me.get_distance_to(self.target_point_x, self.target_point_y) > 250:
+            if me.get_distance_to(self.target_point_x, self.target_point_y) > 300:
                 return
         else:
             self.last_map_master_direction = direction
@@ -446,15 +459,28 @@ class MyStrategy:
         else:
             return True, enemy, distance_to_closest_minion, is_wizard
 
+    def tower_analysis(self, world):
+        for i in world.wizards + world.minions:
+            if i.faction == self.faction:
+                for j in range(6):
+                    x, y = self.enemy_towers_coordinates[j][0], self.enemy_towers_coordinates[j][1]
+                    if self.enemy_towers_status[j] and i.get_distance_to(x, y) < i.vision_range - 10:
+                        for k in world.buildings:
+                            if fabs(k.x - x) < 10 and fabs(k.y - y) < 10:
+                                break
+                        else:
+                            self.enemy_towers_status[j] = False
+
     def debug_func(self, world):
         if world.tick_index % 15 != 0:
             return
         if debug:
             area = self.area_cope
             width = self.width
+            '''
             with debug.pre() as dbg:
                 for i in self.way_trajectory:
-                    dbg.fill_circle((i[0]+ self.x_cage_offset) * width + width / 2,
+                    dbg.fill_circle((i[0] + self.x_cage_offset) * width + width / 2,
                                     (i[1] + self.y_cage_offset) * width + width / 2, 10,
                                     Color(r=0.0, g=0.0, b=1.0))
                 for i in range(len(area)):
@@ -470,7 +496,14 @@ class MyStrategy:
                                           (j + self.y_cage_offset) * width,
                                           (i + 1 + self.x_cage_offset) * width,
                                           (j + 1 + self.y_cage_offset) * width,
-                                          Color(r=0.0, g=0.0, b=0.0))
+                                          Color(r=0.0, g=0.0, b=0.0))'''
             with debug.post() as dbg:
                 dbg.fill_circle(self.target_point_x, self.target_point_y, 20, Color(r=1.0, g=0.0, b=0.0))
                 dbg.fill_circle(self.step_point_x, self.step_point_y, 10, Color(r=0.0, g=1.0, b=0.0))
+                for i in range(6):
+                    if self.enemy_towers_status[i]:
+                        dbg.fill_circle(self.enemy_towers_coordinates[i][0], self.enemy_towers_coordinates[i][1], 40,
+                                        Color(r=0.0, g=1.0, b=0.0))
+                    else:
+                        dbg.fill_circle(self.enemy_towers_coordinates[i][0], self.enemy_towers_coordinates[i][1], 40,
+                                        Color(r=1.0, g=0.0, b=0.0))
