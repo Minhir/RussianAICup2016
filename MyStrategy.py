@@ -5,6 +5,7 @@ from model.World import World
 from model.LaneType import LaneType
 from model.ActionType import ActionType
 from model.Faction import Faction
+from model.MinionType import MinionType
 from model.Message import Message
 from random import choice, random
 from math import sin, cos, fabs, pi
@@ -53,22 +54,17 @@ class MyStrategy:
         self.enemy_towers_coordinates = []
         self.enemy_towers_status = [True, True, True, True, True, True]  # Top1, Top2, Mid1, Mid2, Bot1, Bot2
         self.waypoints_TOP, self.waypoints_MID, self.waypoints_BOT = [], [], []
+        self.wait_status = False
 
     def move(self, me: Wizard, world: World, game: Game, move: Move):
         if world.tick_index == 0:
             self.init(me, move, world)
             return
-        if world.tick_index < 10 and not me.master:
+        if world.tick_index < 500 and not me.master:
             if me.messages:
                 for m in me.messages:
                     self.lane = m.lane
-        if world.tick_index == 10 and self.lane is None:
-            self.lane = choice([LaneType.BOTTOM, LaneType.MIDDLE, LaneType.TOP])
-
-        if world.tick_index - self.last_tick > 500:  # check death
-            self.lane_point_index = 0
-            self.stuck_start_tick = None
-            self.is_fight = False
+        if world.tick_index == 500 and self.lane is None:
             self.lane_analysis(world)
 
         self.last_tick = world.tick_index
@@ -78,6 +74,12 @@ class MyStrategy:
         self.x = me.x
         self.y = me.y
         self.tower_analysis(world)
+
+        if world.tick_index - self.last_tick > 500:  # check death
+            self.lane_point_index = 0
+            self.stuck_start_tick = None
+            self.is_fight = False
+            self.lane_analysis(world)
 
         # Stuck
         if self.check_stuck(world.tick_index):
@@ -91,7 +93,9 @@ class MyStrategy:
             if self.check_if_enemy_near(world, me, game):
                 self.map_master(-1, me)
             else:
-                self.map_master(1, me)
+                # self.map_master(1, me)
+                self.wait_status = True
+                return
             self.step_point_x, self.step_point_y = self.find_way(world, me)
             self.go(me, move, game)
             self.debug_func(world)  # debug
@@ -104,19 +108,21 @@ class MyStrategy:
         # TODO: удар посохом
         # TODO: учёт бонусов на врагах
         # TODO: не всегда стрелять!?
-        self.is_fight, enemy, distance_to_closest_minion, tower_near = self.situation_analysis(world, me)
+        self.is_fight, enemy, distance_to_closest_minion, tower_near, wizards_amount = self.situation_analysis(world, me)
         if self.is_fight:
             self.attack(move, game, me, enemy)
             if (me.life < me.max_life*0.5) or \
-                    (distance_to_closest_minion < 200) or ((type(enemy) is Wizard) and (me.life < enemy.life)):
+                    (distance_to_closest_minion < 200) or \
+                    ((type(enemy) is Wizard) and (me.life < enemy.life)) or \
+                    (wizards_amount > 1):
                 self.map_master(-1, me)
                 self.step_point_x, self.step_point_y = self.find_way(world, me)
                 self.go_back(me, move, game)
             else:
-                if distance_to_closest_minion > 500 - 380 * (me.life / me.max_life):
-                    if not tower_near:
-                        self.step_point_x, self.step_point_y = enemy.x, enemy.y
-                        self.map_master(1, me)
+                if distance_to_closest_minion > 500 - 380 * (me.life / me.max_life)**2:
+                    if not tower_near and (wizards_amount <= 1) and (type(enemy) is not MinionType.FETISH_BLOWDART):
+                        self.target_point_x, self.target_point_y = enemy.x, enemy.y
+                        self.step_point_x, self.step_point_y = self.find_way(world, me)
                         self.go(me, move, game)
             self.debug_func(world)  # debug
             print("fight")
@@ -147,25 +153,30 @@ class MyStrategy:
             move.action = ActionType.MAGIC_MISSILE
 
     def check_danger(self, me):
+        # TODO: производную по жизням
         if me.life < me.max_life * 0.3:
             return True
         else:
             return False
 
     def check_if_enemy_near(self, world, me, game):
-        for i in world.wizards + world.buildings + world.minions:
+        for i in world.wizards + world.buildings:
             if i.faction == self.enemy_faction:
                 if me.get_distance_to(i.x, i.y) < game.wizard_vision_range:
                     return True
+        for i in world.minions:
+            if i.faction == self.enemy_faction:
+                if me.get_distance_to(i.x, i.y) < 400:
+                    return True
         for i in range(6):
             if self.enemy_towers_status[i]:
-                if me.get_distance_to(self.enemy_towers_coordinates[i][0], self.enemy_towers_coordinates[i][1] < 700):
+                if me.get_distance_to(self.enemy_towers_coordinates[i][0], self.enemy_towers_coordinates[i][1]) < 700:
                     return True
         return False
 
     def check_stuck(self, tick):
         if self.stuck_start_tick is None:
-            if self.is_fight:
+            if self.is_fight or self.wait_status:
                 return False
             for i in range(4):
                 self.last5step[i][0] = self.last5step[i + 1][0]
@@ -375,11 +386,11 @@ class MyStrategy:
         else:
             self.enemy_faction = Faction.ACADEMY
         if me.master:
-            move.messages = [Message(LaneType.TOP, None, None),
+            move.messages = [Message(LaneType.MIDDLE, None, None),
                              Message(LaneType.BOTTOM, None, None),
                              Message(LaneType.BOTTOM, None, None),
                              Message(LaneType.BOTTOM, None, None)]
-            self.lane = LaneType.MIDDLE
+            self.lane = LaneType.TOP
         '''Get enemy towers coordinates. Mirror own towers coordinate.
         for i in world.buildings:
             if i.faction == self.faction:
@@ -401,6 +412,13 @@ class MyStrategy:
     def lane_analysis(self, world):
         # TODO: не идти под трон
         top, mid, bot = 0, 0, 0
+        no_top, no_mid, no_bot = False, False, False
+        if not self.enemy_towers_status[1]:
+            no_top = True
+        if not self.enemy_towers_status[3]:
+            no_mid = True
+        if not self.enemy_towers_status[5]:
+            no_bot = True
         for i in world.wizards:
             if i.faction == self.faction and (i.x != self.x and i.y != self.y):
                 # Check if wizard in base
@@ -414,22 +432,24 @@ class MyStrategy:
                     mid += 1
                 if i.y > y_1:
                     bot += 1
-        if mid == 0:
+        if mid == 0 and not no_mid:
             self.lane = LaneType.MIDDLE
             return
-        if bot == 0:
+        if bot == 0 and not no_bot:
             self.lane = LaneType.BOTTOM
             return
-        if top == 0:
+        if top == 0 and not no_top:
             self.lane = LaneType.TOP
-        if mid == 1:
+        if mid == 1 and not no_mid:
             self.lane = LaneType.MIDDLE
             return
-        if bot == 1:
+        if bot == 1 and not no_bot:
             self.lane = LaneType.BOTTOM
             return
-        if top == 1:
+        if top == 1 and not no_top:
             self.lane = LaneType.TOP
+        else:
+            self.lane = LaneType.MIDDLE
 
     def map_master(self, direction, me):
         # TODO: ходьба за руной
@@ -463,12 +483,14 @@ class MyStrategy:
         minions, wizards, buildings = [], [], []
         enemy, tower_near = None, False
         distance_to_closest_minion = float("inf")
+        wizards_amount = 0
         for i in world.wizards:
             if i.faction == self.enemy_faction:
                 if me.get_distance_to(i.x, i.y) < me.cast_range:
                     wizards.append(i)
         if len(wizards) > 0:
             enemy = min(wizards, key=lambda x: x.life)
+            wizards_amount = len(wizards)
         for i in world.buildings:
             if i.faction == self.enemy_faction:
                 if me.get_distance_to(i.x, i.y) < me.cast_range:
@@ -487,9 +509,9 @@ class MyStrategy:
                 enemy = closest_minion
             distance_to_closest_minion = me.get_distance_to(closest_minion.x, closest_minion.y)
         if enemy is None:
-            return False, enemy, distance_to_closest_minion, tower_near
+            return False, enemy, distance_to_closest_minion, tower_near, wizards_amount
         else:
-            return True, enemy, distance_to_closest_minion, tower_near
+            return True, enemy, distance_to_closest_minion, tower_near, wizards_amount
 
     def tower_analysis(self, world):
         for i in world.wizards + world.minions:
